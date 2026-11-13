@@ -106,8 +106,27 @@ The version is stored in the `VERSION` file. The Makefile reads it, and [release
 
   When you merge the release PR, release-please tags `vX.Y.Z`, creates the GitHub Release, and starts `ci.yml` for that tag.
 
-Two more things are set up:
+### Commit messages
 
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/), because release-please reads them to pick the next version:
+
+```
+<type>[optional scope][!]: <lowercase description>
+```
+
+The allowed types are `feat`, `fix`, `perf`, `refactor`, `revert`, `docs`, `style`, `test`, `build`, `ci` and `chore`. Here are three examples:
+
+```
+feat: add seek in mini mode
+fix(bridge): update like-button selector
+feat!: require macOS 26.1
+```
+
+The `conventional-commits.yml` workflow checks every PR. It checks the **PR title**, because squash merge uses it as the commit message on `main`. It also checks **each commit** in the PR with commitlint (`.commitlintrc.json`).
+
+These are also set up or recommended:
+
+- **Branch protection** (recommended): require the *PR title* and *Commit messages* checks before merging into `main`.
 - **Dependabot** keeps the GitHub Actions in the workflows up to date.
 - **Repository setting needed once:** *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests*. Without it, release-please cannot open its PR.
 
@@ -152,4 +171,5 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | `AppIcon.icns` | App icon (original artwork) |
 | `docs/` | README images |
 | `.github/` | Workflows and Dependabot config |
+| `.commitlintrc.json` | Commit message rules |
 | `release-please-config.json`, `.release-please-manifest.json` | release-please setup |
