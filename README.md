@@ -44,10 +44,10 @@ So ReMini wraps the web player in a small, native macOS window that stays on top
 
 ## Download
 
-Prebuilt builds are attached to every [GitHub Release](../../releases) as `ReMini-<version>-macos-arm64.zip`, with a `.sha256` checksum next to them. The same zip is also published to GitHub Packages (ghcr.io) as an OCI artifact:
+Prebuilt builds are attached to every [GitHub Release](../../releases) as `ReMini-<version>-macos-arm64.zip`, with a `.sha256` checksum next to them.
 
 ```sh
-oras pull ghcr.io/twarr58/remini:latest
+gh release download --repo twarr58/re-mini --pattern 'ReMini-*.zip*'
 ```
 
 ### Gatekeeper and the quarantine attribute
@@ -66,7 +66,7 @@ xattr -dr com.apple.quarantine ReMini.app
 - `-d` deletes the attribute and `-r` does it for every file inside the bundle.
 - Removing the attribute only skips the Gatekeeper check for this copy. It does not turn off Gatekeeper.
 - Instead of `xattr` you can try to open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
-- Files fetched with `oras pull`, `curl` or `gh release download` usually get no quarantine attribute. Apps you build yourself never get one.
+- Files fetched with `curl` or `gh release download` usually get no quarantine attribute. Apps you build yourself never get one.
 
 ## Build & run
 
@@ -99,7 +99,7 @@ The version is stored in the `VERSION` file. The Makefile reads it, and [release
 - **`ci.yml`, Build, Test & Publish.** It runs on pushes to `main`, on pull requests, and on `v*` tags.
   1. **Build** on `macos-26`: `make test` (unit tests), `make app`, `make check`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
   2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
-  3. **Publish** (release tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
+  3. **Publish** (release tags only): attaches the zip and its checksum to the GitHub Release. The build fails if the tag does not match `VERSION`.
 - **`release-please.yml`.** On every push to `main` it opens or updates a *release PR*. That PR bumps `VERSION` and updates `CHANGELOG.md` based on [Conventional Commits](https://www.conventionalcommits.org/):
   - `fix:` → patch
   - `feat:` → minor
@@ -175,6 +175,7 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | `make-icon.swift` | Renders `AppIcon.icns` |
 | `AppIcon.icns` | App icon (original artwork) |
 | `docs/` | README images |
+| `TODO.md` | Planned work (Homebrew cask, notarization, …) |
 | `.github/` | Workflows and Dependabot config |
 | `.commitlintrc.json` | Commit message rules |
 | `release-please-config.json`, `.release-please-manifest.json` | release-please setup |
