@@ -2,6 +2,8 @@
 set -e
 cd "$(dirname "$0")"
 APP=ReMini.app
+VERSION=${VERSION:-0.0.0}
+BUILD=${BUILD:-1}
 mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 cp AppIcon.icns $APP/Contents/Resources/
 swiftc -O -swift-version 5 main.swift -o $APP/Contents/MacOS/ReMini
@@ -13,6 +15,8 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>CFBundleName</key><string>ReMini</string>
   <key>CFBundleExecutable</key><string>ReMini</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

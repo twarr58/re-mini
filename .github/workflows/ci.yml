@@ -1,0 +1,185 @@
+name: Build, Test & Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  APP_NAME: ReMini
+
+jobs:
+  build:
+    name: Build
+    # NSGlassEffectView requires the macOS 26 SDK
+    runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      zip: ${{ steps.package.outputs.zip }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          swiftc --version
+
+      - name: Build app bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ github.run_number }}
+        run: ./build.sh
+
+      - name: Package (zip)
+        id: package
+        run: |
+          ZIP="${APP_NAME}-${{ steps.version.outputs.version }}-macos-$(uname -m).zip"
+          ZIP="${ZIP//+/_}"
+          # ditto keeps symlinks, xattrs and the code signature intact
+          ditto -c -k --sequesterRsrc --keepParent "${APP_NAME}.app" "$ZIP"
+          shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  test:
+    name: Test
+    needs: build
+    runs-on: macos-26
+    env:
+      ZIP: ${{ needs.build.outputs.zip }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: app
+
+      - name: Verify checksum
+        run: shasum -a 256 -c "$ZIP.sha256"
+
+      - name: Unpack
+        run: ditto -x -k "$ZIP" .
+
+      - name: Bundle structure
+        run: |
+          set -x
+          test -x "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+          test -f "$APP_NAME.app/Contents/Resources/AppIcon.icns"
+          test -f "$APP_NAME.app/Contents/Info.plist"
+
+      - name: Info.plist
+        run: |
+          PLIST="$APP_NAME.app/Contents/Info.plist"
+          plutil -lint "$PLIST"
+          check() {
+            actual=$(/usr/libexec/PlistBuddy -c "Print :$1" "$PLIST")
+            echo "$1 = $actual"
+            [ "$actual" = "$2" ] || { echo "::error::$1 expected '$2', got '$actual'"; exit 1; }
+          }
+          check CFBundleIdentifier local.remini
+          check CFBundleExecutable "$APP_NAME"
+          check CFBundlePackageType APPL
+          check CFBundleShortVersionString "$VERSION"
+
+      - name: Binary & code signature
+        run: |
+          BIN="$APP_NAME.app/Contents/MacOS/$APP_NAME"
+          file "$BIN"
+          lipo -info "$BIN"
+          otool -L "$BIN" | grep -q AppKit.framework
+          otool -L "$BIN" | grep -q WebKit.framework
+          codesign --verify --deep --strict --verbose=2 "$APP_NAME.app"
+          codesign -dv "$APP_NAME.app" 2>&1
+
+      - name: Smoke test (launches and stays alive)
+        timeout-minutes: 2
+        run: |
+          "./$APP_NAME.app/Contents/MacOS/$APP_NAME" > app.log 2>&1 &
+          PID=$!
+          sleep 10
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo "::error::App exited during startup"
+            cat app.log
+            exit 1
+          fi
+          kill "$PID" || true
+          echo "App started and ran for 10s without crashing"
+
+  publish:
+    name: Publish
+    needs: [build, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # GitHub Release
+      packages: write   # ghcr.io package
+    env:
+      ZIP: ${{ needs.build.outputs.zip }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: app
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Push app to GitHub Packages (ghcr.io)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP_NAME,,}"
+          echo "$GH_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          oras push "$IMAGE:$VERSION" \
+            --artifact-type application/vnd.remini.macos-app \
+            --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --annotation "org.opencontainers.image.description=ReMini macOS app bundle (zip)" \
+            --annotation "org.opencontainers.image.version=$VERSION" \
+            --annotation "org.opencontainers.image.revision=$GITHUB_SHA" \
+            "$ZIP:application/zip" \
+            "$ZIP.sha256:text/plain"
+          # prereleases (v1.2.0-rc.1) do not move "latest"
+          [[ "$VERSION" == *-* ]] || oras tag "$IMAGE:$VERSION" latest
+          {
+            echo "### 📦 Package published"
+            echo '```bash'
+            echo "oras pull $IMAGE:$VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.APP_NAME }} ${{ env.VERSION }}
+          generate_release_notes: true
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          files: |
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256
