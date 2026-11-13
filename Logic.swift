@@ -104,3 +104,14 @@ func parseAuthCallback(_ url: URL, redirectURI: String, state: String) -> AuthCa
     if let code = q["code"], !code.isEmpty { return .code(code) }
     return .denied(q["error"] ?? "unknown_error")
 }
+
+// MARK: player memory
+
+/// The web player (open.spotify.com) grows to several GB over a long session. Reload it when its process
+/// passes `limit`, but never while the user is looking at it (Full mode) and never in the middle of a track:
+/// when paused right away, while playing only at a track change (then playback resumes on the next track).
+func shouldReloadPlayer(footprint: UInt64?, limit: UInt64, playing: Bool, fullMode: Bool,
+                        trackJustChanged: Bool, sinceLastReload: TimeInterval) -> Bool {
+    guard let footprint, footprint >= limit, !fullMode, sinceLastReload >= 600 else { return false }
+    return !playing || trackJustChanged
+}

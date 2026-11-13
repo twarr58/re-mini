@@ -83,6 +83,12 @@ struct NowPlaying: Equatable {
 // for macOS Now Playing); times + saved state from Spotify's data-testid hooks (verified against the live player).
 let bridgeJS = """
 const secs = s => (s || "").split(":").map(Number).reduce((a, b) => a * 60 + b, 0);
+// While the player is invisible (Tiny/Mini), switch off CSS animations and transitions. Every animated element
+// gets its own compositing layer, and WebKit keeps creating and dropping those layers even at alpha 0.
+const calm = document.createElement("style");
+calm.textContent = "html.remini-hidden *, html.remini-hidden *::before, html.remini-hidden *::after " +
+                   "{ animation: none !important; transition: none !important; }";
+document.documentElement.appendChild(calm);
 setInterval(() => {
   const m = navigator.mediaSession.metadata;
   const like = document.querySelector('[data-testid^="now-playing-widget"] button[aria-checked]');
@@ -95,7 +101,8 @@ setInterval(() => {
               playing: navigator.mediaSession.playbackState === "playing" || [...document.querySelectorAll("video,audio")].some(v => !v.paused),
               liked: like?.getAttribute("aria-checked") === "true",
               pos: secs(document.querySelector('[data-testid="playback-position"]')?.textContent),
-              dur: secs(document.querySelector('[data-testid="playback-duration"]')?.textContent) };
+              dur: secs(document.querySelector('[data-testid="playback-duration"]')?.textContent),
+              hidden: document.documentElement.classList.contains("remini-hidden") };
   const j = JSON.stringify(s);
   if (j !== window.__np) { window.__np = j; webkit.messageHandlers.np.postMessage(s); }
 }, 1000);
@@ -138,6 +145,12 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     var saved = false   // in the ReMini playlist (API mode only)
     var trackURI: String?
     var likeBusy = false
+    var lastRenderKey = ""
+
+    // web player memory watchdog, see shouldReloadPlayer in Logic.swift
+    let playerMemoryLimit = UInt64(UserDefaults.standard.object(forKey: "playerMemoryLimitMB") as? Int ?? 1500) << 20
+    var lastPlayerReload = Date()
+    var resumeAfterReload: Date?   // set while waiting for the reloaded player to resume playback
     var menuArt: NSImage?
 
     override init() {
@@ -211,6 +224,9 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         }
         panel.delegate = self
         panel.orderFrontRegardless()
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkPlayerMemory(trackJustChanged: false) }
+        }
 
         // logged out -> Spotify's own login page in full mode (the login form needs the web view)
         cfg.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
@@ -331,9 +347,15 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         fill.frame.size.width = np.dur > 0 ? track.bounds.width * min(np.pos / np.dur, 1) : 0
         CATransaction.commit()
 
-        playBtn.image = NSImage(systemSymbolName: np.playing ? "pause.circle.fill" : "play.circle.fill", accessibilityDescription: nil)
+        // render runs every second while playing (position); everything below only changes with the track,
+        // play state or saved state, so skip it when none of those changed
         let api = spotify.isConnected
         let isSaved = api ? saved : np.liked
+        let key = "\(np.title)|\(np.artist)|\(np.playing)|\(isSaved)|\(api)"
+        guard key != lastRenderKey else { return }
+        lastRenderKey = key
+
+        playBtn.image = NSImage(systemSymbolName: np.playing ? "pause.circle.fill" : "play.circle.fill", accessibilityDescription: nil)
         let target = api ? SpotifyAPI.playlistName : "Liked Songs"
         let likeImage = NSImage(systemSymbolName: isSaved ? "checkmark.circle.fill" : "plus.circle", accessibilityDescription: nil)
         let likeTip = isSaved ? "In \(target) (click to change)" : "Save to \(target)"
@@ -406,11 +428,42 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
                              art: d["art"] as? String ?? "", playing: d["playing"] as? Bool ?? false,
                              liked: d["liked"] as? Bool ?? false,
                              pos: (d["pos"] as? NSNumber)?.doubleValue ?? 0, dur: (d["dur"] as? NSNumber)?.doubleValue ?? 0)
+        if (d["hidden"] as? Bool ?? false) != (mode != .full) { syncHiddenClass() }   // e.g. after a reload
         if new.art != np.art { loadArt(new.art) }
         let trackChanged = new.title != np.title || new.artist != np.artist
         np = new
         if trackChanged { refreshSaved() }
+        if let t = resumeAfterReload {   // the player came back after a memory reload: continue playing
+            if Date().timeIntervalSince(t) > 30 { resumeAfterReload = nil }
+            else if !new.title.isEmpty && !new.playing { resumeAfterReload = nil; playPause() }
+        } else if trackChanged && new.playing {
+            checkPlayerMemory(trackJustChanged: true)
+        }
         render()
+    }
+
+    // MARK: player memory
+
+    /// Memory of the web content process (what Activity Monitor shows for open.spotify.com), or nil when
+    /// WebKit does not tell us its pid. `_webProcessIdentifier` is private WebKit API, so it is checked first.
+    func playerFootprint() -> UInt64? {
+        guard web.responds(to: NSSelectorFromString("_webProcessIdentifier")),
+              let pid = (web.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else { return nil }
+        var info = rusage_info_v2()
+        let r = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V2, $0) }
+        }
+        return r == 0 ? info.ri_phys_footprint : nil
+    }
+
+    func checkPlayerMemory(trackJustChanged: Bool) {
+        guard resumeAfterReload == nil,
+              shouldReloadPlayer(footprint: playerFootprint(), limit: playerMemoryLimit, playing: np.playing,
+                                 fullMode: full, trackJustChanged: trackJustChanged,
+                                 sinceLastReload: Date().timeIntervalSince(lastPlayerReload)) else { return }
+        lastPlayerReload = Date()
+        if np.playing { resumeAfterReload = Date() }
+        web.reload()
     }
 
     func loadArt(_ s: String) {
@@ -606,8 +659,14 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         return true
     }
 
+    // see bridgeJS: no CSS animations while the player is invisible
+    func syncHiddenClass() {
+        web.evaluateJavaScript("document.documentElement.classList.toggle('remini-hidden', \(mode != .full))")
+    }
+
     func setMode(_ m: Mode) {
         guard m != mode else { return }
+        defer { syncHiddenClass() }
         if full {   // leaving full mode: keep whatever size the user dragged it to
             fullSize = panel.frame.size
             UserDefaults.standard.set(NSStringFromSize(fullSize), forKey: "fullSize")
