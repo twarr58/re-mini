@@ -176,5 +176,21 @@ test("parseAuthCallback") {
     expectEqual(parseAuthCallback(URL(string: "http://127.0.0.1:43821/callbackX?code=1&state=s1")!, redirectURI: redirect, state: "s1"), nil)
 }
 
+// MARK: player memory
+
+test("shouldReloadPlayer") {
+    let gb: UInt64 = 1 << 30, limit = gb + gb / 2
+    func check(_ fp: UInt64?, playing: Bool = false, full: Bool = false, changed: Bool = false, since: TimeInterval = 3600) -> Bool {
+        shouldReloadPlayer(footprint: fp, limit: limit, playing: playing, fullMode: full, trackJustChanged: changed, sinceLastReload: since)
+    }
+    expect(!check(nil), "unknown footprint")
+    expect(!check(gb), "below the limit")
+    expect(check(3 * gb), "paused and over the limit")
+    expect(!check(3 * gb, full: true), "never in Full mode")
+    expect(!check(3 * gb, playing: true), "not in the middle of a track")
+    expect(check(3 * gb, playing: true, changed: true), "at a track change")
+    expect(!check(3 * gb, since: 60), "not again right after a reload")
+}
+
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

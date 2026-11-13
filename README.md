@@ -175,6 +175,11 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 - **Now-playing bridge.** A small injected script checks the page once a second and reports to the app only when something changes.
   - Title, artist, and cover come from `navigator.mediaSession`, with the player bar as a fallback while paused.
   - Progress and the saved (+) state come from the player's `data-testid` attributes.
+- **Memory.** Over a long session, the Spotify web player grows to several GB, just like in a browser tab. ReMini checks the web player's memory once a minute. When it passes 1.5 GB, ReMini reloads the player:
+  - It never reloads in Full mode.
+  - When paused, it reloads right away. When playing, it waits for the next track change and then continues playback, which leaves a gap of a few seconds.
+  - Change the limit with `defaults write local.remini playerMemoryLimitMB -int 2500`.
+- **Less work while hidden.** In Tiny and Mini modes, CSS animations in the invisible player are switched off. The menu bar and buttons are redrawn only when the track, play state, or saved state changes.
 - **Controls.** The native buttons click the real buttons in the web player, so queue, shuffle, and Spotify Connect behave as they do in a browser.
 - **+ (save).** By default, it clicks the player's own save button. With your own Spotify app connected, it uses the Spotify Web API (`SpotifyAPI.swift`) to add the track to, or remove it from, the ReMini playlist. See [Saving tracks](#saving-tracks-).
 
