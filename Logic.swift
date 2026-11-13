@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 // Pure helpers without UI state. Compiled into the app and into the unit tests (Tests/main.swift).
 
@@ -42,4 +43,64 @@ func averageColor(_ cg: CGImage) -> NSColor? {
     ctx.interpolationQuality = .medium
     ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
     return NSColor(red: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255, blue: CGFloat(px[2]) / 255, alpha: 1)
+}
+
+// MARK: Spotify OAuth (Authorization Code with PKCE, no client secret)
+
+/// Base64url without padding (RFC 4648 §5), as PKCE and JWT use it.
+func base64URL(_ data: Data) -> String {
+    data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
+/// Random PKCE code verifier: 64 random bytes -> 86 characters (allowed: 43...128).
+func pkceVerifier() -> String {
+    var rng = SystemRandomNumberGenerator()
+    return base64URL(Data((0..<64).map { _ in UInt8.random(in: .min ... .max, using: &rng) }))
+}
+
+/// S256 code challenge for a verifier.
+func pkceChallenge(for verifier: String) -> String {
+    base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
+}
+
+/// application/x-www-form-urlencoded body; keeps the field order.
+func formEncode(_ fields: [(String, String)]) -> String {
+    let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "" }
+    return fields.map { "\(enc($0.0))=\(enc($0.1))" }.joined(separator: "&")
+}
+
+func spotifyAuthorizeURL(clientID: String, redirectURI: String, scopes: [String], state: String, challenge: String) -> URL {
+    var c = URLComponents(string: "https://accounts.spotify.com/authorize")!
+    c.queryItems = [
+        URLQueryItem(name: "client_id", value: clientID),
+        URLQueryItem(name: "response_type", value: "code"),
+        URLQueryItem(name: "redirect_uri", value: redirectURI),
+        URLQueryItem(name: "code_challenge_method", value: "S256"),
+        URLQueryItem(name: "code_challenge", value: challenge),
+        URLQueryItem(name: "state", value: state),
+        URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+    ]
+    return c.url!
+}
+
+enum AuthCallback: Equatable {
+    case code(String)
+    case denied(String)
+    case stateMismatch
+}
+
+/// Result of the OAuth redirect, or nil when `url` is not the redirect URI (keep navigating).
+func parseAuthCallback(_ url: URL, redirectURI: String, state: String) -> AuthCallback? {
+    guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let r = URLComponents(string: redirectURI),
+          c.scheme == r.scheme, c.host == r.host, c.port == r.port, c.path == r.path else { return nil }
+    var q: [String: String] = [:]
+    for item in c.queryItems ?? [] where q[item.name] == nil { q[item.name] = item.value ?? "" }
+    guard q["state"] == state else { return .stateMismatch }
+    if let code = q["code"], !code.isEmpty { return .code(code) }
+    return .denied(q["error"] ?? "unknown_error")
 }

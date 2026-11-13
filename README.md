@@ -18,18 +18,18 @@
 
 On my work machine, company policy blocks the Spotify desktop app. The web player works, but it lives in a browser tab that is always buried under a pile of other windows and tabs. Just pausing a song or seeing what's playing means digging for that tab.
 
-So ReMini wraps the web player in a small, native macOS window that stays on top. It shows what's playing in the menu bar and gives you play, skip, and like without hunting for a tab. When you need to search or browse, it expands to the full web player.
+So ReMini wraps the web player in a small, native macOS window that stays on top. It shows what's playing in the menu bar and gives you play, skip, and save without hunting for a tab. When you need to search or browse, it expands to the full web player.
 
 ## Features
 
 - **Three sizes.** Switch with <kbd>⌘1</kbd> / <kbd>⌘2</kbd> / <kbd>⌘3</kbd>, the View menu, or the menu bar menu:
-  - **Tiny** (140×140): only the cover. Click it to play or pause. Dislike and like float in the corners.
-  - **Mini** (340×500): cover, title, artist, progress, and controls (👎 ⏮ ⏯ ⏭ ♥).
+  - **Tiny** (140×140): only the cover. Click it to play or pause. Dislike and + (save) float in the corners.
+  - **Mini** (340×500): cover, title, artist, progress, and controls (👎 ⏮ ⏯ ⏭ +).
   - **Full**: the complete Spotify web player for browsing, search, and playlists. It can be resized and remembers its size.
 - **Liquid Glass look.** It uses `NSGlassEffectView`, and the glass is tinted with the average colour of the current cover.
 - **Menu bar item.**
   - The bar shows the current track. Long titles scroll smoothly.
-  - Its menu works like Control Center's Now Playing: cover, title, artist, and a row of buttons (👎 ⏮ ⏯ ⏭ ♥). The buttons act without closing the menu.
+  - Its menu works like Control Center's Now Playing: cover, title, artist, and a row of buttons (👎 ⏮ ⏯ ⏭ +). The buttons act without closing the menu.
 - **Standard window.** It has normal close, minimize, and zoom buttons (green toggles Mini ↔ Full) and floats above other windows.
   - **Close** hides the window and the music keeps playing. Bring it back with the Dock icon or **Show Player**.
 - **Smart resizing.** When you switch sizes, the window grows away from the nearer screen edges. Switching back puts it exactly where it was.
@@ -41,6 +41,27 @@ So ReMini wraps the web player in a small, native macOS window that stays on top
 - macOS 26 (Tahoe) or later, because the app uses `NSGlassEffectView`.
 - Xcode Command Line Tools for `swiftc`. You don't need an Xcode project.
 - A Spotify account. Free works, Premium removes ads.
+
+## Saving tracks (+)
+
+The + button saves the current track to your private playlist **Liked from ReMini**. ReMini creates the playlist the first time you use it. When a track is already in the playlist, the button shows a green ✓, and clicking it again removes the track.
+
+It uses the official Spotify Web API, not the web player's buttons, so you need your own free Spotify app. You set it up once:
+
+1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app.
+2. Add the Redirect URI `http://127.0.0.1:43821/callback`.
+3. Tick **Web API** and save.
+4. Click + in ReMini, or choose **Connect Spotify API…** from the menu bar menu, and paste the app's **Client ID**.
+5. A small window asks you to allow access. You are usually logged in already, because it shares cookies with the player.
+
+How the connection works:
+
+- It uses Authorization Code with PKCE, so no client secret is stored anywhere.
+- The refresh token is kept in the macOS Keychain.
+- **Disconnect Spotify API** forgets it.
+- The app asks only for these scopes: reading the current track, reading your playlists, and changing your playlists.
+
+New Spotify apps start in *development mode*, which only works for the accounts you add under **User Management** in the dashboard. That includes your own account.
 
 ## Download
 
@@ -75,7 +96,7 @@ make          # build and ad-hoc sign ReMini.app
 make run      # build and open it
 ```
 
-The `Makefile` compiles `main.swift` and `Logic.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
+The `Makefile` compiles `main.swift`, `Logic.swift` and `SpotifyAPI.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
 
 | Target | What it does |
 |---|---|
@@ -151,14 +172,16 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 - **Playback engine.** A `WKWebView` runs `open.spotify.com`. In Tiny and Mini modes it stays in the window with `alphaValue = 0`, not `isHidden`. WebKit suspends hidden views, and that would stall playback.
 - **Now-playing bridge.** A small injected script checks the page once a second and reports to the app only when something changes.
   - Title, artist, and cover come from `navigator.mediaSession`, with the player bar as a fallback while paused.
-  - Progress and like state come from the player's `data-testid` attributes.
+  - Progress comes from the player's `data-testid` attributes.
 - **Controls.** The native buttons click the real buttons in the web player, so queue, shuffle, and Spotify Connect behave as they do in a browser.
+- **+ (save).** Uses the Spotify Web API (`SpotifyAPI.swift`) to read the current track and add it to, or remove it from, the playlist. See [Saving tracks](#saving-tracks-).
 
 ## Known limitations
 
 - **Selectors can break.** The app depends on Spotify's web player DOM (`data-testid`). If Spotify renames those attributes, some controls stop working until the selectors in `bridgeJS` and `click(...)` are updated.
 - **Dislike = skip.** Spotify has no general "dislike" for tracks, so 👎 skips to the next one.
-- **Un-liking** a track opens Spotify's own "add to playlist" dialog, so the app switches to Full mode for it.
+- **+ works only for music tracks.** Podcast episodes are not saved.
+- **+ does not touch Liked Songs.** Tracks go only to the ReMini playlist.
 - **No seeking** from the progress bar in Mini mode.
 - **Browser identity.** The web player reports itself as Safari through its user agent.
 
@@ -167,7 +190,8 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | File | Purpose |
 |---|---|
 | `main.swift` | The app: windows, web view, menus |
-| `Logic.swift` | Pure helpers (time format, window anchoring, cover colour) shared with the tests |
+| `Logic.swift` | Pure helpers (time format, window anchoring, cover colour, OAuth/PKCE) shared with the tests |
+| `SpotifyAPI.swift` | Web API client for the + button: login, Keychain, playlist |
 | `Tests/main.swift` | Unit tests, run with `make test` |
 | `Makefile` | Build, package, and install targets |
 | `Info.plist.in` | `Info.plist` template |

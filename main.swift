@@ -76,16 +76,15 @@ final class CoverView: NSView {
 }
 
 struct NowPlaying: Equatable {
-    var title = "", artist = "", art = "", playing = false, liked = false, pos = 0.0, dur = 0.0
+    var title = "", artist = "", art = "", playing = false, pos = 0.0, dur = 0.0
 }
 
 // Polls the page; reports only on change. Title/artist/art from mediaSession (the standard API Spotify fills
-// for macOS Now Playing); times + like state from Spotify's data-testid hooks (verified against the live player).
+// for macOS Now Playing); times from Spotify's data-testid hooks (verified against the live player).
 let bridgeJS = """
 const secs = s => (s || "").split(":").map(Number).reduce((a, b) => a * 60 + b, 0);
 setInterval(() => {
   const m = navigator.mediaSession.metadata;
-  const like = document.querySelector('[data-testid^="now-playing-widget"] button[aria-checked]');
   // mediaSession is empty until playback starts; fall back to the player bar (track loaded but paused)
   const w = document.querySelector('[data-testid^="now-playing-widget"]');
   const cover = w?.querySelector('[data-testid="cover-art-image"]')?.src?.replace(/ab67616d0000(4851|1e02)/, "ab67616d0000b273"); // ponytail: Spotify CDN size codes, 64/300 -> 640px
@@ -93,7 +92,6 @@ setInterval(() => {
               artist: m?.artist || w?.querySelector('[data-testid$="byline"]')?.textContent || "",
               art: m?.artwork?.at(-1)?.src || cover || "",
               playing: navigator.mediaSession.playbackState === "playing" || [...document.querySelectorAll("video,audio")].some(v => !v.paused),
-              liked: like?.getAttribute("aria-checked") === "true",
               pos: secs(document.querySelector('[data-testid="playback-position"]')?.textContent),
               dur: secs(document.querySelector('[data-testid="playback-duration"]')?.textContent) };
   const j = JSON.stringify(s);
@@ -132,6 +130,11 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     var playBtn: NSButton!, likeBtn: NSButton!
 
     var np = NowPlaying()
+    // "+" button: membership in the "Liked from ReMini" playlist, via the Web API
+    let spotify = SpotifyAPI()
+    var saved = false
+    var trackURI: String?
+    var likeBusy = false
     var menuArt: NSImage?
 
     override init() {
@@ -276,8 +279,8 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         let prev = button("backward.fill", 18, #selector(prevTrack))
         playBtn = button("play.circle.fill", 40, #selector(playPause))
         let next = button("forward.fill", 18, #selector(nextTrack))
-        likeBtn = button("heart", 15, #selector(like))
-        dis.toolTip = "Dislike (skip)"; likeBtn.toolTip = "Like"
+        likeBtn = button("plus.circle", 15, #selector(like))
+        dis.toolTip = "Dislike (skip)"
         for (btn, dx) in [(dis, -124.0), (prev, -62.0), (playBtn!, 0.0), (next, 62.0), (likeBtn!, 124.0)] {
             btn.frame = NSRect(x: W / 2 + dx - 24, y: y(436, 48), width: 48, height: 48)
             mini.addSubview(btn)
@@ -308,8 +311,8 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
             tiny.addSubview(g)
         }
         let dis = button("hand.thumbsdown", 12, #selector(dislike))
-        tinyLike = button("heart", 12, #selector(like))
-        dis.toolTip = "Dislike (skip)"; tinyLike.toolTip = "Like"
+        tinyLike = button("plus.circle", 12, #selector(like))
+        dis.toolTip = "Dislike (skip)"
         chip(dis, x: m + 6)
         chip(tinyLike, x: tinySize.width - m - 6 - 30)
     }
@@ -326,10 +329,13 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         CATransaction.commit()
 
         playBtn.image = NSImage(systemSymbolName: np.playing ? "pause.circle.fill" : "play.circle.fill", accessibilityDescription: nil)
-        likeBtn.image = NSImage(systemSymbolName: np.liked ? "heart.fill" : "heart", accessibilityDescription: nil)
-        likeBtn.contentTintColor = np.liked ? .systemGreen : .labelColor
-        tinyLike.image = likeBtn.image
-        tinyLike.contentTintColor = likeBtn.contentTintColor
+        let likeImage = NSImage(systemSymbolName: saved ? "checkmark.circle.fill" : "plus.circle", accessibilityDescription: nil)
+        let likeTip = saved ? "Remove from \(SpotifyAPI.playlistName)" : "Save to \(SpotifyAPI.playlistName)"
+        for b in [likeBtn!, tinyLike!, menuLike] {
+            b.image = likeImage
+            b.contentTintColor = saved ? .systemGreen : .labelColor
+            b.toolTip = likeTip
+        }
         tinyArt.opacity = np.playing || np.title.isEmpty ? 1 : 0.55   // dimmed cover = paused
 
         renderMenu()
@@ -392,10 +398,11 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         guard let d = m.body as? [String: Any] else { return }
         let new = NowPlaying(title: d["title"] as? String ?? "", artist: d["artist"] as? String ?? "",
                              art: d["art"] as? String ?? "", playing: d["playing"] as? Bool ?? false,
-                             liked: d["liked"] as? Bool ?? false,
                              pos: (d["pos"] as? NSNumber)?.doubleValue ?? 0, dur: (d["dur"] as? NSNumber)?.doubleValue ?? 0)
         if new.art != np.art { loadArt(new.art) }
+        let trackChanged = new.title != np.title || new.artist != np.artist
         np = new
+        if trackChanged { refreshSaved() }
         render()
     }
 
@@ -436,6 +443,12 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
             i.target = self
             i.state = mode == m ? .on : .off
         }
+        menu.addItem(.separator())
+        if spotify.isConnected {
+            menu.addItem(withTitle: "Disconnect Spotify API", action: #selector(disconnectSpotify), keyEquivalent: "").target = self
+        } else {
+            menu.addItem(withTitle: "Connect Spotify API…", action: #selector(connectSpotify), keyEquivalent: "").target = self
+        }
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -445,7 +458,7 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     lazy var menuTitle = NSTextField(labelWithString: "")
     lazy var menuArtist = NSTextField(labelWithString: "")
     lazy var menuPlay = button("play.fill", 18, #selector(playPause))
-    lazy var menuLike = button("heart", 15, #selector(like))
+    lazy var menuLike = button("plus.circle", 15, #selector(like))
 
     lazy var menuCard: NSView = {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 68))
@@ -470,7 +483,7 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         let dis = button("hand.thumbsdown", 15, #selector(dislike))
         let prev = button("backward.fill", 16, #selector(prevTrack))
         let next = button("forward.fill", 16, #selector(nextTrack))
-        dis.toolTip = "Dislike (skip)"; menuLike.toolTip = "Like"
+        dis.toolTip = "Dislike (skip)"
         for (b, dx) in [(dis, -100.0), (prev, -50.0), (menuPlay, 0.0), (next, 50.0), (menuLike, 100.0)] {
             b.frame = NSRect(x: 140 + dx - 18, y: 4, width: 36, height: 36)
             v.addSubview(b)
@@ -483,8 +496,6 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         menuArtist.stringValue = np.artist
         menuArtView.image = menuArt ?? NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)
         menuPlay.image = NSImage(systemSymbolName: np.playing ? "pause.fill" : "play.fill", accessibilityDescription: nil)
-        menuLike.image = likeBtn.image
-        menuLike.contentTintColor = likeBtn.contentTintColor
     }
 
     // MARK: actions (clicks on the hidden web player)
@@ -496,14 +507,64 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     @objc func nextTrack() { click("[data-testid=\"control-button-skip-forward\"]") }
     @objc func prevTrack() { click("[data-testid=\"control-button-skip-back\"]") }
 
-    // Not liked: one click saves to Liked Songs. Already liked: Spotify opens its own
-    // "add to playlist" sheet (that's where you un-like), so switch to full mode to show it.
+    // "+" saves the current track to the private playlist "Liked from ReMini" (created on first use);
+    // on a saved track it removes it again. Uses the Web API, so it does not depend on the player's DOM.
     @objc func like() {
-        click("[data-testid^=\"now-playing-widget\"] button[aria-checked]")
-        if np.liked {
-            if !full { setMode(.full) }
-            showPanel()
+        guard !likeBusy else { return }   // a double click would add and remove again
+        likeBusy = true
+        Task {
+            defer { likeBusy = false }
+            do {
+                if !spotify.isConnected {   // first use: ask for the Client ID, then log in
+                    if spotify.clientID == nil { guard spotify.askClientID() else { return } }
+                    try await spotify.connect()
+                }
+                guard let uri = try await spotify.currentTrackURI() else { throw SpotifyError.nothingPlaying }
+                trackURI = uri
+                saved = try await spotify.toggle(uri)
+                render()
+            } catch SpotifyError.cancelled {
+            } catch {
+                showError(error)
+            }
         }
+    }
+
+    // after a track change: is the new track in the playlist? (only when connected; never prompts)
+    func refreshSaved() {
+        saved = false
+        trackURI = nil
+        guard spotify.isConnected, !np.title.isEmpty else { return }
+        let title = np.title
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))   // the API lags the player by a moment
+            guard np.title == title, let uri = try? await spotify.currentTrackURI() else { return }
+            trackURI = uri
+            saved = (try? await spotify.isSaved(uri)) ?? false
+            render()
+        }
+    }
+
+    @objc func connectSpotify() {
+        guard spotify.askClientID() else { return }
+        Task {
+            do { try await spotify.connect(); refreshSaved() }
+            catch SpotifyError.cancelled {}
+            catch { showError(error) }
+        }
+    }
+
+    @objc func disconnectSpotify() {
+        spotify.disconnect()
+        saved = false
+        render()
+    }
+
+    func showError(_ error: Error) {
+        let a = NSAlert(error: error)
+        a.messageText = "Could not save the track"
+        a.informativeText = error.localizedDescription
+        a.runModal()
     }
 
     // ponytail: Spotify has no real dislike for tracks; skip is the closest universal action
@@ -604,6 +665,8 @@ func submenu(_ title: String, _ items: [(String, Selector, String, AnyObject?)])
 let sep = ("-", #selector(NSApplication.terminate(_:)), "", nil as AnyObject?)
 let main = NSMenu()
 main.addItem(submenu("ReMini", [
+    ("Connect Spotify API…", #selector(Controller.connectSpotify), "", controller),
+    ("Disconnect Spotify API", #selector(Controller.disconnectSpotify), "", controller), sep,
     ("Hide ReMini", #selector(NSApplication.hide(_:)), "h", nil), sep,
     ("Quit ReMini", #selector(NSApplication.terminate(_:)), "q", nil)]))
 main.addItem(submenu("Edit", [   // so ⌘C/⌘V/⌘A work in the web view
