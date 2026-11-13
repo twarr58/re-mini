@@ -42,16 +42,69 @@ So ReMini wraps the web player in a small, native macOS window that stays on top
 - Xcode Command Line Tools for `swiftc`. You don't need an Xcode project.
 - A Spotify account. Free works, Premium removes ads.
 
+## Download
+
+Prebuilt builds are attached to every [GitHub Release](../../releases) as `ReMini-<version>-macos-arm64.zip`, with a `.sha256` checksum next to them. The same zip is also published to GitHub Packages (ghcr.io) as an OCI artifact:
+
+```sh
+oras pull ghcr.io/twarr58/remini:latest
+```
+
+### Gatekeeper and the quarantine attribute
+
+Builds are only **ad-hoc signed**. They are not signed with an Apple Developer ID and not notarized. When you download a file with a browser, macOS adds the `com.apple.quarantine` extended attribute to it, and the unzipped app inherits it. Gatekeeper then refuses to open the app and says it "is damaged" or "can't be checked for malicious software".
+
+Check the checksum, then remove the attribute once:
+
+```sh
+shasum -a 256 -c ReMini-*.zip.sha256
+unzip ReMini-*.zip
+xattr -dr com.apple.quarantine ReMini.app
+```
+
+- `xattr -l ReMini.app` shows the attributes the app has now.
+- `-d` deletes the attribute and `-r` does it for every file inside the bundle.
+- Removing the attribute only skips the Gatekeeper check for this copy. It does not turn off Gatekeeper.
+- Instead of `xattr` you can try to open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+- Files fetched with `oras pull`, `curl` or `gh release download` usually get no quarantine attribute. Apps you build yourself never get one.
+
 ## Build & run
 
 ```sh
-./build.sh
-open ReMini.app
+make          # build and ad-hoc sign ReMini.app
+make run      # build and open it
 ```
 
-`build.sh` compiles `main.swift`, creates the `.app` bundle, and ad-hoc signs it. Copy `ReMini.app` to `/Applications` if you want to keep it.
+The `Makefile` compiles `main.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
 
-To change the icon, run `swift make-icon.swift` and then rebuild. To draw the hand-written "RE" over your own base image, use `swift make-icon.swift base.png`.
+| Target | What it does |
+|---|---|
+| `make` / `make app` | Build and sign `ReMini.app` |
+| `make run` | Build and open the app |
+| `make test` | Check the bundle: plist lint, linked frameworks, `codesign --verify` |
+| `make zip` | Package the app as a zip with a `.sha256` (uses `ditto`, so the signature survives) |
+| `make install` | Copy the app to `/Applications` (change with `PREFIX=...`) |
+| `make uninstall` | Remove it from `/Applications` |
+| `make icon` | Regenerate `AppIcon.icns` (`make icon BASE=base.png` draws the "RE" over your own image) |
+| `make clean` | Remove build outputs |
+| `make help` | List targets |
+
+Variables: `VERSION` and `BUILD` set the version in `Info.plist` (`make VERSION=1.2.0`), and `SIGN_ID` picks a signing identity instead of the ad-hoc `-`.
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and `v*` tags:
+
+1. **Build** on `macos-26`: `make app`, `make test`, `make zip`.
+2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
+3. **Publish** (tags only): pushes the zip to ghcr.io and creates a GitHub Release with the zip attached. Tags with a `-` (`v1.0.0-rc.1`) become prereleases and do not move `latest`.
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Dependabot keeps the GitHub Actions in the workflow up to date.
 
 ## Keyboard shortcuts
 
@@ -87,7 +140,9 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | File | Purpose |
 |---|---|
 | `main.swift` | The whole app |
-| `build.sh` | Build and bundle script |
+| `Makefile` | Build, package, and install targets |
+| `Info.plist.in` | `Info.plist` template |
 | `make-icon.swift` | Renders `AppIcon.icns` |
 | `AppIcon.icns` | App icon (original artwork) |
 | `docs/` | README images |
+| `.github/` | CI workflow and Dependabot config |

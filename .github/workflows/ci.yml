@@ -49,16 +49,20 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD: ${{ github.run_number }}
-        run: ./build.sh
+        run: make app
+
+      - name: Static checks
+        run: make test
 
       - name: Package (zip)
         id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ github.run_number }}
         run: |
-          ZIP="${APP_NAME}-${{ steps.version.outputs.version }}-macos-$(uname -m).zip"
+          ZIP="${APP_NAME}-${VERSION}-macos-$(uname -m).zip"
           ZIP="${ZIP//+/_}"
-          # ditto keeps symlinks, xattrs and the code signature intact
-          ditto -c -k --sequesterRsrc --keepParent "${APP_NAME}.app" "$ZIP"
-          shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+          make zip ZIP="$ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
