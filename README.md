@@ -99,13 +99,15 @@ The version is stored in the `VERSION` file. The Makefile reads it, and [release
 - **`ci.yml`, Build, Test & Publish.** It runs on pushes to `main`, on pull requests, and on `v*` tags.
   1. **Build** on `macos-26`: `make test` (unit tests), `make app`, `make check`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
   2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
-  3. **Publish** (tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
+  3. **Publish** (release tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
 - **`release-please.yml`.** On every push to `main` it opens or updates a *release PR*. That PR bumps `VERSION` and updates `CHANGELOG.md` based on [Conventional Commits](https://www.conventionalcommits.org/):
   - `fix:` → patch
   - `feat:` → minor
   - `feat!:` or `BREAKING CHANGE:` → major (while the version is below 1.0, these bump the minor version instead)
 
-  When you merge the release PR, release-please tags `vX.Y.Z`, creates the GitHub Release, and starts `ci.yml` for that tag.
+  When you merge the release PR, release-please tags `ReMini-vX.Y.Z`, creates the GitHub Release, and starts `ci.yml` for that tag.
+
+  To build and publish an existing release again, run *Build, Test & Publish* by hand (*Actions → Run workflow*) and set **tag**, for example `ReMini-v0.1.0`.
 
 ### Commit messages
 

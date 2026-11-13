@@ -6,16 +6,23 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish again (e.g. v0.2.0)
+        type: string
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ !inputs.tag && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   APP_NAME: ReMini
+  # release tag being built: an explicit input, or the tag the run was started on
+  RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
 
 jobs:
   build:
@@ -24,24 +31,33 @@ jobs:
     runs-on: macos-26
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
       zip: ${{ steps.package.outputs.zip }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || '' }}
 
       - name: Determine version
         id: version
         run: |
           FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+          if [[ -n "$RELEASE_TAG" ]]; then
+            # v1.2.3, v1.2.3-rc.1, and older component tags like ReMini-v0.1.0
+            if [[ ! "$RELEASE_TAG" =~ (^|-)v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+              echo "::error::Tag $RELEASE_TAG is not a release tag (vX.Y.Z)"
+              exit 1
+            fi
+            VERSION="${BASH_REMATCH[2]}"
             if [[ "$VERSION" != "$FILE_VERSION" ]]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file ($FILE_VERSION). Releases are tagged by release-please."
+              echo "::error::Tag $RELEASE_TAG does not match VERSION file ($FILE_VERSION). Releases are tagged by release-please."
               exit 1
             fi
           else
             VERSION="${FILE_VERSION}-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           # same VERSION/BUILD for every make call in this job, otherwise make
           # regenerates Info.plist and breaks the signature
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -87,6 +103,7 @@ jobs:
     env:
       ZIP: ${{ needs.build.outputs.zip }}
       VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -146,7 +163,7 @@ jobs:
   publish:
     name: Publish
     needs: [build, test]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.build.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write   # GitHub Release
@@ -154,6 +171,7 @@ jobs:
     env:
       ZIP: ${{ needs.build.outputs.zip }}
       VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -189,7 +207,6 @@ jobs:
       - name: Attach app to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber --repo "$GITHUB_REPOSITORY"
