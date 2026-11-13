@@ -26,7 +26,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       zip: ${{ steps.package.outputs.zip }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Determine version
         id: version
@@ -68,7 +68,7 @@ jobs:
           make zip ZIP="$ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app
           path: |
@@ -85,7 +85,7 @@ jobs:
       ZIP: ${{ needs.build.outputs.zip }}
       VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: app
 
@@ -152,11 +152,11 @@ jobs:
       ZIP: ${{ needs.build.outputs.zip }}
       VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: app
 
-      - uses: oras-project/setup-oras@v1
+      - uses: oras-project/setup-oras@v2
 
       - name: Push app to GitHub Packages (ghcr.io)
         env:
