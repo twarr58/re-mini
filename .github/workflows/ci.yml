@@ -31,10 +31,15 @@ jobs:
       - name: Determine version
         id: version
         run: |
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$VERSION" != "$FILE_VERSION" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file ($FILE_VERSION). Use the Release workflow."
+              exit 1
+            fi
           else
-            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
+            VERSION="${FILE_VERSION}-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
@@ -178,12 +183,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ env.APP_NAME }} ${{ env.VERSION }}
-          generate_release_notes: true
-          prerelease: ${{ contains(env.VERSION, '-') }}
-          files: |
-            ${{ env.ZIP }}
-            ${{ env.ZIP }}.sha256
+      # release-please already created the release (with changelog) -> just attach assets.
+      # For a manually pushed tag, create the release here.
+      - name: Attach app to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            PRE=""; [[ "$VERSION" == *-* ]] && PRE="--prerelease"
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" --repo "$GITHUB_REPOSITORY" \
+              --title "$APP_NAME $VERSION" --generate-notes --verify-tag $PRE
+          fi

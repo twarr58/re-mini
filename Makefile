@@ -1,6 +1,6 @@
 NAME      := ReMini
 BUNDLE_ID := local.remini
-VERSION   ?= 0.0.0
+VERSION   ?= $(shell tr -d '[:space:]' < VERSION)
 BUILD     ?= 1
 
 APP      := $(NAME).app

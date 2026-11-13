@@ -91,20 +91,25 @@ The `Makefile` compiles `main.swift`, creates the `.app` bundle from `Info.plist
 
 Variables: `VERSION` and `BUILD` set the version in `Info.plist` (`make VERSION=1.2.0`), and `SIGN_ID` picks a signing identity instead of the ad-hoc `-`.
 
-## CI/CD
+## CI/CD and releases
 
-`.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and `v*` tags:
+The version is stored in the `VERSION` file. The Makefile reads it, and [release-please](https://github.com/googleapis/release-please) updates it, so you never edit it by hand.
 
-1. **Build** on `macos-26`: `make app`, `make test`, `make zip`.
-2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
-3. **Publish** (tags only): pushes the zip to ghcr.io and creates a GitHub Release with the zip attached. Tags with a `-` (`v1.0.0-rc.1`) become prereleases and do not move `latest`.
+- **`ci.yml`, Build, Test & Publish.** It runs on pushes to `main`, on pull requests, and on `v*` tags.
+  1. **Build** on `macos-26`: `make app`, `make test`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
+  2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
+  3. **Publish** (tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
+- **`release-please.yml`.** On every push to `main` it opens or updates a *release PR*. That PR bumps `VERSION` and updates `CHANGELOG.md` based on [Conventional Commits](https://www.conventionalcommits.org/):
+  - `fix:` → patch
+  - `feat:` → minor
+  - `feat!:` or `BREAKING CHANGE:` → major (while the version is below 1.0, these bump the minor version instead)
 
-```sh
-git tag v1.0.0
-git push origin v1.0.0
-```
+  When you merge the release PR, release-please tags `vX.Y.Z`, creates the GitHub Release, and starts `ci.yml` for that tag.
 
-Dependabot keeps the GitHub Actions in the workflow up to date.
+Two more things are set up:
+
+- **Dependabot** keeps the GitHub Actions in the workflows up to date.
+- **Repository setting needed once:** *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests*. Without it, release-please cannot open its PR.
 
 ## Keyboard shortcuts
 
@@ -142,7 +147,9 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | `main.swift` | The whole app |
 | `Makefile` | Build, package, and install targets |
 | `Info.plist.in` | `Info.plist` template |
+| `VERSION` | Current version (managed by release-please) |
 | `make-icon.swift` | Renders `AppIcon.icns` |
 | `AppIcon.icns` | App icon (original artwork) |
 | `docs/` | README images |
-| `.github/` | CI workflow and Dependabot config |
+| `.github/` | Workflows and Dependabot config |
+| `release-please-config.json`, `.release-please-manifest.json` | release-please setup |
