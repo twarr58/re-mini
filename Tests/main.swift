@@ -126,5 +126,55 @@ test("averageColor mixes colours") {
     expectClose(c.blueComponent, 0.5, tolerance: 0.2)
 }
 
+// MARK: Spotify OAuth helpers
+
+test("base64URL has no padding and uses the URL alphabet") {
+    expectEqual(base64URL(Data([0xfb, 0xff, 0xfe])), "-__-")
+    expectEqual(base64URL(Data("a".utf8)), "YQ")
+}
+
+test("PKCE challenge matches RFC 7636 appendix B") {
+    expectEqual(pkceChallenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+                "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+}
+
+test("PKCE verifier is long, random and URL-safe") {
+    let a = pkceVerifier(), b = pkceVerifier()
+    expect((43...128).contains(a.count), "length \(a.count)")
+    expect(a != b, "two verifiers are equal")
+    let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+    expect(a.unicodeScalars.allSatisfy(allowed.contains), "unexpected characters in \(a)")
+}
+
+test("formEncode escapes reserved characters") {
+    expectEqual(formEncode([("grant_type", "authorization_code"), ("redirect_uri", "http://127.0.0.1:43821/callback"), ("x", "a b+c&d")]),
+                "grant_type=authorization_code&redirect_uri=http%3A%2F%2F127.0.0.1%3A43821%2Fcallback&x=a%20b%2Bc%26d")
+}
+
+let redirect = "http://127.0.0.1:43821/callback"
+
+test("authorize URL carries the PKCE parameters") {
+    let u = spotifyAuthorizeURL(clientID: "abc", redirectURI: redirect, scopes: ["a-b", "c"], state: "s1", challenge: "ch")
+    let c = URLComponents(url: u, resolvingAgainstBaseURL: false)!
+    expectEqual(c.host, "accounts.spotify.com")
+    expectEqual(c.path, "/authorize")
+    let q = Dictionary(uniqueKeysWithValues: (c.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    expectEqual(q["client_id"], "abc")
+    expectEqual(q["response_type"], "code")
+    expectEqual(q["redirect_uri"], redirect)
+    expectEqual(q["code_challenge_method"], "S256")
+    expectEqual(q["code_challenge"], "ch")
+    expectEqual(q["state"], "s1")
+    expectEqual(q["scope"], "a-b c")
+}
+
+test("parseAuthCallback") {
+    expectEqual(parseAuthCallback(URL(string: "\(redirect)?code=XYZ&state=s1")!, redirectURI: redirect, state: "s1"), .code("XYZ"))
+    expectEqual(parseAuthCallback(URL(string: "\(redirect)?error=access_denied&state=s1")!, redirectURI: redirect, state: "s1"), .denied("access_denied"))
+    expectEqual(parseAuthCallback(URL(string: "\(redirect)?code=XYZ&state=evil")!, redirectURI: redirect, state: "s1"), .stateMismatch)
+    expectEqual(parseAuthCallback(URL(string: "https://accounts.spotify.com/authorize?state=s1")!, redirectURI: redirect, state: "s1"), nil)
+    expectEqual(parseAuthCallback(URL(string: "http://127.0.0.1:43821/callbackX?code=1&state=s1")!, redirectURI: redirect, state: "s1"), nil)
+}
+
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

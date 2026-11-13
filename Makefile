@@ -8,7 +8,7 @@ CONTENTS := $(APP)/Contents
 BIN      := $(CONTENTS)/MacOS/$(NAME)
 PLIST    := $(CONTENTS)/Info.plist
 ICON     := $(CONTENTS)/Resources/AppIcon.icns
-SOURCES  := main.swift Logic.swift
+SOURCES  := main.swift Logic.swift SpotifyAPI.swift
 TEST_BIN := .build/unit-tests
 ZIP      ?= $(NAME)-$(VERSION)-macos-$(shell uname -m).zip
 
