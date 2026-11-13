@@ -75,13 +75,14 @@ make          # build and ad-hoc sign ReMini.app
 make run      # build and open it
 ```
 
-The `Makefile` compiles `main.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
+The `Makefile` compiles `main.swift` and `Logic.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
 
 | Target | What it does |
 |---|---|
 | `make` / `make app` | Build and sign `ReMini.app` |
 | `make run` | Build and open the app |
-| `make test` | Check the bundle: plist lint, linked frameworks, `codesign --verify` |
+| `make test` | Run the unit tests (`Tests/main.swift`) |
+| `make check` | Check the built bundle: plist lint, linked frameworks, `codesign --verify` |
 | `make zip` | Package the app as a zip with a `.sha256` (uses `ditto`, so the signature survives) |
 | `make install` | Copy the app to `/Applications` (change with `PREFIX=...`) |
 | `make uninstall` | Remove it from `/Applications` |
@@ -96,7 +97,7 @@ Variables: `VERSION` and `BUILD` set the version in `Info.plist` (`make VERSION=
 The version is stored in the `VERSION` file. The Makefile reads it, and [release-please](https://github.com/googleapis/release-please) updates it, so you never edit it by hand.
 
 - **`ci.yml`, Build, Test & Publish.** It runs on pushes to `main`, on pull requests, and on `v*` tags.
-  1. **Build** on `macos-26`: `make app`, `make test`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
+  1. **Build** on `macos-26`: `make test` (unit tests), `make app`, `make check`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
   2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
   3. **Publish** (tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
 - **`release-please.yml`.** On every push to `main` it opens or updates a *release PR*. That PR bumps `VERSION` and updates `CHANGELOG.md` based on [Conventional Commits](https://www.conventionalcommits.org/):
@@ -163,7 +164,9 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 
 | File | Purpose |
 |---|---|
-| `main.swift` | The whole app |
+| `main.swift` | The app: windows, web view, menus |
+| `Logic.swift` | Pure helpers (time format, window anchoring, cover colour) shared with the tests |
+| `Tests/main.swift` | Unit tests, run with `make test` |
 | `Makefile` | Build, package, and install targets |
 | `Info.plist.in` | `Info.plist` template |
 | `VERSION` | Current version (managed by release-please) |

@@ -54,11 +54,14 @@ jobs:
           xcodebuild -version
           swiftc --version
 
+      - name: Unit tests
+        run: make test
+
       - name: Build app bundle
         run: make app
 
       - name: Static checks
-        run: make test
+        run: make check
 
       - name: Package (zip)
         id: package
