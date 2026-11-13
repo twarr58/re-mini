@@ -230,8 +230,8 @@ final class SpotifyAPI {
         let a = NSAlert()
         a.messageText = "Connect ReMini to Spotify"
         a.informativeText = """
-        The + button saves tracks to your playlist "\(Self.playlistName)" through the Spotify Web API. \
-        For that you need your own (free) Spotify app:
+        Optional. Without this, + saves to Liked Songs. With your own (free) Spotify app, + saves \
+        to your private playlist "\(Self.playlistName)" through the Spotify Web API instead:
 
         1. Open developer.spotify.com/dashboard and create an app.
         2. Add this Redirect URI: \(Self.redirectURI)

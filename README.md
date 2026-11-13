@@ -44,24 +44,26 @@ So ReMini wraps the web player in a small, native macOS window that stays on top
 
 ## Saving tracks (+)
 
-The + button saves the current track to your private playlist **Liked from ReMini**. ReMini creates the playlist the first time you use it. When a track is already in the playlist, the button shows a green ✓, and clicking it again removes the track.
+The + button works out of the box. It clicks the web player's own button and saves the current track to **Liked Songs**. A saved track shows a green ✓. If you click ✓, Spotify opens its "add to playlist" dialog, where you can remove the track or pick other playlists, so ReMini switches to Full mode for it.
 
-It uses the official Spotify Web API, not the web player's buttons, so you need your own free Spotify app. You set it up once:
+### Optional: a separate "Liked from ReMini" playlist
+
+If you want + to save to a private playlist **Liked from ReMini** instead, connect your own free Spotify app. ReMini creates the playlist the first time you use it. Clicking ✓ removes the track again, without opening the dialog. This uses the official Spotify Web API, not the web player's buttons.
 
 1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app.
 2. Add the Redirect URI `http://127.0.0.1:43821/callback`.
 3. Tick **Web API** and save.
-4. Click + in ReMini, or choose **Connect Spotify API…** from the menu bar menu, and paste the app's **Client ID**.
+4. In ReMini, choose **Save to Liked from ReMini (own Spotify app)…** from the menu bar menu, and paste the app's **Client ID**.
 5. A small window asks you to allow access. You are usually logged in already, because it shares cookies with the player.
 
 How the connection works:
 
 - It uses Authorization Code with PKCE, so no client secret is stored anywhere.
 - The refresh token is kept in the macOS Keychain.
-- **Disconnect Spotify API** forgets it.
+- **Disconnect Spotify API** goes back to Liked Songs.
 - The app asks only for these scopes: reading the current track, reading your playlists, and changing your playlists.
 
-New Spotify apps start in *development mode*, which only works for the accounts you add under **User Management** in the dashboard. That includes your own account.
+New Spotify apps run in *development mode*, which only works for the accounts listed under **User Management** in the dashboard. That includes your own account. This is why every user connects their own app: a shared app would need every user added by hand, and Spotify only lifts that limit for large companies.
 
 ## Download
 
@@ -172,16 +174,16 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 - **Playback engine.** A `WKWebView` runs `open.spotify.com`. In Tiny and Mini modes it stays in the window with `alphaValue = 0`, not `isHidden`. WebKit suspends hidden views, and that would stall playback.
 - **Now-playing bridge.** A small injected script checks the page once a second and reports to the app only when something changes.
   - Title, artist, and cover come from `navigator.mediaSession`, with the player bar as a fallback while paused.
-  - Progress comes from the player's `data-testid` attributes.
+  - Progress and the saved (+) state come from the player's `data-testid` attributes.
 - **Controls.** The native buttons click the real buttons in the web player, so queue, shuffle, and Spotify Connect behave as they do in a browser.
-- **+ (save).** Uses the Spotify Web API (`SpotifyAPI.swift`) to read the current track and add it to, or remove it from, the playlist. See [Saving tracks](#saving-tracks-).
+- **+ (save).** By default, it clicks the player's own save button. With your own Spotify app connected, it uses the Spotify Web API (`SpotifyAPI.swift`) to add the track to, or remove it from, the ReMini playlist. See [Saving tracks](#saving-tracks-).
 
 ## Known limitations
 
 - **Selectors can break.** The app depends on Spotify's web player DOM (`data-testid`). If Spotify renames those attributes, some controls stop working until the selectors in `bridgeJS` and `click(...)` are updated.
 - **Dislike = skip.** Spotify has no general "dislike" for tracks, so 👎 skips to the next one.
-- **+ works only for music tracks.** Podcast episodes are not saved.
-- **+ does not touch Liked Songs.** Tracks go only to the ReMini playlist.
+- **+ in Liked Songs mode** depends on the player's button (`data-testid`), like the other controls.
+- **+ in playlist mode** works only for music tracks. Podcast episodes are not saved.
 - **No seeking** from the progress bar in Mini mode.
 - **Browser identity.** The web player reports itself as Safari through its user agent.
 

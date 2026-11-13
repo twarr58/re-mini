@@ -76,15 +76,16 @@ final class CoverView: NSView {
 }
 
 struct NowPlaying: Equatable {
-    var title = "", artist = "", art = "", playing = false, pos = 0.0, dur = 0.0
+    var title = "", artist = "", art = "", playing = false, liked = false, pos = 0.0, dur = 0.0
 }
 
 // Polls the page; reports only on change. Title/artist/art from mediaSession (the standard API Spotify fills
-// for macOS Now Playing); times from Spotify's data-testid hooks (verified against the live player).
+// for macOS Now Playing); times + saved state from Spotify's data-testid hooks (verified against the live player).
 let bridgeJS = """
 const secs = s => (s || "").split(":").map(Number).reduce((a, b) => a * 60 + b, 0);
 setInterval(() => {
   const m = navigator.mediaSession.metadata;
+  const like = document.querySelector('[data-testid^="now-playing-widget"] button[aria-checked]');
   // mediaSession is empty until playback starts; fall back to the player bar (track loaded but paused)
   const w = document.querySelector('[data-testid^="now-playing-widget"]');
   const cover = w?.querySelector('[data-testid="cover-art-image"]')?.src?.replace(/ab67616d0000(4851|1e02)/, "ab67616d0000b273"); // ponytail: Spotify CDN size codes, 64/300 -> 640px
@@ -92,6 +93,7 @@ setInterval(() => {
               artist: m?.artist || w?.querySelector('[data-testid$="byline"]')?.textContent || "",
               art: m?.artwork?.at(-1)?.src || cover || "",
               playing: navigator.mediaSession.playbackState === "playing" || [...document.querySelectorAll("video,audio")].some(v => !v.paused),
+              liked: like?.getAttribute("aria-checked") === "true",
               pos: secs(document.querySelector('[data-testid="playback-position"]')?.textContent),
               dur: secs(document.querySelector('[data-testid="playback-duration"]')?.textContent) };
   const j = JSON.stringify(s);
@@ -130,9 +132,10 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     var playBtn: NSButton!, likeBtn: NSButton!
 
     var np = NowPlaying()
-    // "+" button: membership in the "Liked from ReMini" playlist, via the Web API
+    // "+" button. Default: the web player's own button (Liked Songs). With the user's own
+    // Spotify app connected: the "Liked from ReMini" playlist through the Web API.
     let spotify = SpotifyAPI()
-    var saved = false
+    var saved = false   // in the ReMini playlist (API mode only)
     var trackURI: String?
     var likeBusy = false
     var menuArt: NSImage?
@@ -329,11 +332,14 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         CATransaction.commit()
 
         playBtn.image = NSImage(systemSymbolName: np.playing ? "pause.circle.fill" : "play.circle.fill", accessibilityDescription: nil)
-        let likeImage = NSImage(systemSymbolName: saved ? "checkmark.circle.fill" : "plus.circle", accessibilityDescription: nil)
-        let likeTip = saved ? "Remove from \(SpotifyAPI.playlistName)" : "Save to \(SpotifyAPI.playlistName)"
+        let api = spotify.isConnected
+        let isSaved = api ? saved : np.liked
+        let target = api ? SpotifyAPI.playlistName : "Liked Songs"
+        let likeImage = NSImage(systemSymbolName: isSaved ? "checkmark.circle.fill" : "plus.circle", accessibilityDescription: nil)
+        let likeTip = isSaved ? "In \(target) (click to change)" : "Save to \(target)"
         for b in [likeBtn!, tinyLike!, menuLike] {
             b.image = likeImage
-            b.contentTintColor = saved ? .systemGreen : .labelColor
+            b.contentTintColor = isSaved ? .systemGreen : .labelColor
             b.toolTip = likeTip
         }
         tinyArt.opacity = np.playing || np.title.isEmpty ? 1 : 0.55   // dimmed cover = paused
@@ -398,6 +404,7 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         guard let d = m.body as? [String: Any] else { return }
         let new = NowPlaying(title: d["title"] as? String ?? "", artist: d["artist"] as? String ?? "",
                              art: d["art"] as? String ?? "", playing: d["playing"] as? Bool ?? false,
+                             liked: d["liked"] as? Bool ?? false,
                              pos: (d["pos"] as? NSNumber)?.doubleValue ?? 0, dur: (d["dur"] as? NSNumber)?.doubleValue ?? 0)
         if new.art != np.art { loadArt(new.art) }
         let trackChanged = new.title != np.title || new.artist != np.artist
@@ -447,7 +454,7 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         if spotify.isConnected {
             menu.addItem(withTitle: "Disconnect Spotify API", action: #selector(disconnectSpotify), keyEquivalent: "").target = self
         } else {
-            menu.addItem(withTitle: "Connect Spotify API…", action: #selector(connectSpotify), keyEquivalent: "").target = self
+            menu.addItem(withTitle: "Save to \(SpotifyAPI.playlistName) (own Spotify app)…", action: #selector(connectSpotify), keyEquivalent: "").target = self
         }
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
@@ -507,23 +514,35 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     @objc func nextTrack() { click("[data-testid=\"control-button-skip-forward\"]") }
     @objc func prevTrack() { click("[data-testid=\"control-button-skip-back\"]") }
 
-    // "+" saves the current track to the private playlist "Liked from ReMini" (created on first use);
-    // on a saved track it removes it again. Uses the Web API, so it does not depend on the player's DOM.
     @objc func like() {
+        if spotify.isConnected { likeViaAPI() } else { likeInPlayer() }
+    }
+
+    // Default, works for everyone: the web player's own "+" button. Not saved: one click saves to
+    // Liked Songs. Already saved: Spotify opens its "add to playlist" sheet (that's where you remove
+    // it or pick other playlists), so switch to full mode to show it.
+    func likeInPlayer() {
+        click("[data-testid^=\"now-playing-widget\"] button[aria-checked]")
+        if np.liked {
+            if !full { setMode(.full) }
+            showPanel()
+        }
+    }
+
+    // Opt-in (own Spotify app connected): toggle the track in the private playlist "Liked from ReMini",
+    // created on first use. Uses the Web API, so it does not depend on the player's DOM.
+    func likeViaAPI() {
         guard !likeBusy else { return }   // a double click would add and remove again
         likeBusy = true
         Task {
             defer { likeBusy = false }
             do {
-                if !spotify.isConnected {   // first use: ask for the Client ID, then log in
-                    if spotify.clientID == nil { guard spotify.askClientID() else { return } }
-                    try await spotify.connect()
-                }
                 guard let uri = try await spotify.currentTrackURI() else { throw SpotifyError.nothingPlaying }
                 trackURI = uri
                 saved = try await spotify.toggle(uri)
                 render()
-            } catch SpotifyError.cancelled {
+            } catch SpotifyError.notLoggedIn {
+                render()   // refresh token was revoked: back to the player's button
             } catch {
                 showError(error)
             }
@@ -548,7 +567,7 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
     @objc func connectSpotify() {
         guard spotify.askClientID() else { return }
         Task {
-            do { try await spotify.connect(); refreshSaved() }
+            do { try await spotify.connect(); refreshSaved(); render() }
             catch SpotifyError.cancelled {}
             catch { showError(error) }
         }
@@ -665,7 +684,7 @@ func submenu(_ title: String, _ items: [(String, Selector, String, AnyObject?)])
 let sep = ("-", #selector(NSApplication.terminate(_:)), "", nil as AnyObject?)
 let main = NSMenu()
 main.addItem(submenu("ReMini", [
-    ("Connect Spotify API…", #selector(Controller.connectSpotify), "", controller),
+    ("Save to Liked from ReMini (own Spotify app)…", #selector(Controller.connectSpotify), "", controller),
     ("Disconnect Spotify API", #selector(Controller.disconnectSpotify), "", controller), sep,
     ("Hide ReMini", #selector(NSApplication.hide(_:)), "h", nil), sep,
     ("Quit ReMini", #selector(NSApplication.terminate(_:)), "q", nil)]))
