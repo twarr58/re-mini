@@ -388,8 +388,6 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         marqueeLayer.add(a, forKey: "marquee")
     }
 
-    func fmt(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
-
     func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let d = m.body as? [String: Any] else { return }
         let new = NowPlaying(title: d["title"] as? String ?? "", artist: d["artist"] as? String ?? "",
@@ -537,9 +535,9 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         mode = m
         let size = [Mode.tiny: tinySize, .mini: miniSize, .full: fullSize][m]!
         let v = (panel.screen ?? NSScreen.main!).visibleFrame
-        var f = NSRect(origin: anchored(size), size: size)
-        f.origin.x = min(max(f.origin.x, v.minX), v.maxX - size.width)
-        f.origin.y = min(max(f.origin.y, v.minY), v.maxY - size.height)
+        let a = resolveAnchor(anchor, frame: panel.frame, visible: v, newSize: size)
+        anchor = a
+        let f = placedFrame(panel.frame, size: size, anchor: a, visible: v)
 
         panel.minSize = full ? NSSize(width: 700, height: 420) : size
         panel.maxSize = full ? NSSize(width: 10000, height: 10000) : size
@@ -585,31 +583,8 @@ final class Controller: NSResponder, WKUIDelegate, WKScriptMessageHandler, NSMen
         UserDefaults.standard.set(NSStringFromSize(fullSize), forKey: "fullSize")
     }
 
-    // New origin for a resize: grow away from the nearer screen edges. Window in the left half keeps its
-    // left edge (grows right), right half keeps its right edge (grows left); same for top/bottom.
-    // The corner is decided when growing (from the small window) and reused when shrinking back,
-    // otherwise the big window's centre would pick a different corner and the round trip would drift.
-    var anchor: (left: Bool, bottom: Bool)?
-
-    func anchored(_ size: NSSize) -> NSPoint {
-        let f = panel.frame, v = (panel.screen ?? NSScreen.main!).visibleFrame
-        if anchor == nil || size.width * size.height > f.width * f.height {
-            anchor = (f.midX < v.midX, f.midY < v.midY)
-        }
-        let a = anchor!
-        return NSPoint(x: a.left ? f.minX : f.maxX - size.width,
-                       y: a.bottom ? f.minY : f.maxY - size.height)
-    }
-}
-
-// 1x1 downsample = average colour
-func averageColor(_ cg: CGImage) -> NSColor? {
-    var px = [UInt8](repeating: 0, count: 4)
-    guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-    ctx.interpolationQuality = .medium
-    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-    return NSColor(red: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255, blue: CGFloat(px[2]) / 255, alpha: 1)
+    // corner kept fixed across resizes, see resolveAnchor in Logic.swift
+    var anchor: Anchor?
 }
 
 let app = NSApplication.shared
