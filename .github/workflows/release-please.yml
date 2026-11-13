@@ -1,0 +1,39 @@
+name: Release Please
+
+# Keeps a "release PR" open that bumps VERSION and CHANGELOG.md from
+# conventional commits. Merging it tags vX.Y.Z, creates the GitHub Release
+# and starts "Build, Test & Publish" for that tag.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # release commit, tag, GitHub Release
+  pull-requests: write   # release PR
+  actions: write         # dispatch ci.yml for the new tag
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Tags created with GITHUB_TOKEN don't trigger push workflows,
+      # but workflow_dispatch is allowed.
+      - name: Build, test & publish the release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "### 🚀 Released $TAG — build & publish started" >> "$GITHUB_STEP_SUMMARY"

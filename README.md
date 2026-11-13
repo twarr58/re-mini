@@ -42,16 +42,93 @@ So ReMini wraps the web player in a small, native macOS window that stays on top
 - Xcode Command Line Tools for `swiftc`. You don't need an Xcode project.
 - A Spotify account. Free works, Premium removes ads.
 
+## Download
+
+Prebuilt builds are attached to every [GitHub Release](../../releases) as `ReMini-<version>-macos-arm64.zip`, with a `.sha256` checksum next to them. The same zip is also published to GitHub Packages (ghcr.io) as an OCI artifact:
+
+```sh
+oras pull ghcr.io/twarr58/remini:latest
+```
+
+### Gatekeeper and the quarantine attribute
+
+Builds are only **ad-hoc signed**. They are not signed with an Apple Developer ID and not notarized. When you download a file with a browser, macOS adds the `com.apple.quarantine` extended attribute to it, and the unzipped app inherits it. Gatekeeper then refuses to open the app and says it "is damaged" or "can't be checked for malicious software".
+
+Check the checksum, then remove the attribute once:
+
+```sh
+shasum -a 256 -c ReMini-*.zip.sha256
+unzip ReMini-*.zip
+xattr -dr com.apple.quarantine ReMini.app
+```
+
+- `xattr -l ReMini.app` shows the attributes the app has now.
+- `-d` deletes the attribute and `-r` does it for every file inside the bundle.
+- Removing the attribute only skips the Gatekeeper check for this copy. It does not turn off Gatekeeper.
+- Instead of `xattr` you can try to open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+- Files fetched with `oras pull`, `curl` or `gh release download` usually get no quarantine attribute. Apps you build yourself never get one.
+
 ## Build & run
 
 ```sh
-./build.sh
-open ReMini.app
+make          # build and ad-hoc sign ReMini.app
+make run      # build and open it
 ```
 
-`build.sh` compiles `main.swift`, creates the `.app` bundle, and ad-hoc signs it. Copy `ReMini.app` to `/Applications` if you want to keep it.
+The `Makefile` compiles `main.swift`, creates the `.app` bundle from `Info.plist.in`, and ad-hoc signs it. It only rebuilds what changed.
 
-To change the icon, run `swift make-icon.swift` and then rebuild. To draw the hand-written "RE" over your own base image, use `swift make-icon.swift base.png`.
+| Target | What it does |
+|---|---|
+| `make` / `make app` | Build and sign `ReMini.app` |
+| `make run` | Build and open the app |
+| `make test` | Check the bundle: plist lint, linked frameworks, `codesign --verify` |
+| `make zip` | Package the app as a zip with a `.sha256` (uses `ditto`, so the signature survives) |
+| `make install` | Copy the app to `/Applications` (change with `PREFIX=...`) |
+| `make uninstall` | Remove it from `/Applications` |
+| `make icon` | Regenerate `AppIcon.icns` (`make icon BASE=base.png` draws the "RE" over your own image) |
+| `make clean` | Remove build outputs |
+| `make help` | List targets |
+
+Variables: `VERSION` and `BUILD` set the version in `Info.plist` (`make VERSION=1.2.0`), and `SIGN_ID` picks a signing identity instead of the ad-hoc `-`.
+
+## CI/CD and releases
+
+The version is stored in the `VERSION` file. The Makefile reads it, and [release-please](https://github.com/googleapis/release-please) updates it, so you never edit it by hand.
+
+- **`ci.yml`, Build, Test & Publish.** It runs on pushes to `main`, on pull requests, and on `v*` tags.
+  1. **Build** on `macos-26`: `make app`, `make test`, `make zip`. Builds that are not releases get versions like `0.1.0-dev.42+abc1234`.
+  2. **Test** the zipped artifact: checksum, bundle layout, `Info.plist`, code signature, and a launch smoke test.
+  3. **Publish** (tags only): pushes the zip to ghcr.io and attaches it to the GitHub Release. The build fails if the tag does not match `VERSION`.
+- **`release-please.yml`.** On every push to `main` it opens or updates a *release PR*. That PR bumps `VERSION` and updates `CHANGELOG.md` based on [Conventional Commits](https://www.conventionalcommits.org/):
+  - `fix:` → patch
+  - `feat:` → minor
+  - `feat!:` or `BREAKING CHANGE:` → major (while the version is below 1.0, these bump the minor version instead)
+
+  When you merge the release PR, release-please tags `vX.Y.Z`, creates the GitHub Release, and starts `ci.yml` for that tag.
+
+### Commit messages
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/), because release-please reads them to pick the next version:
+
+```
+<type>[optional scope][!]: <lowercase description>
+```
+
+The allowed types are `feat`, `fix`, `perf`, `refactor`, `revert`, `docs`, `style`, `test`, `build`, `ci` and `chore`. Here are three examples:
+
+```
+feat: add seek in mini mode
+fix(bridge): update like-button selector
+feat!: require macOS 26.1
+```
+
+The `conventional-commits.yml` workflow checks every PR. It checks the **PR title**, because squash merge uses it as the commit message on `main`. It also checks **each commit** in the PR with commitlint (`.commitlintrc.json`).
+
+These are also set up or recommended:
+
+- **Branch protection** (recommended): require the *PR title* and *Commit messages* checks before merging into `main`.
+- **Dependabot** keeps the GitHub Actions in the workflows up to date.
+- **Repository setting needed once:** *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests*. Without it, release-please cannot open its PR.
 
 ## Keyboard shortcuts
 
@@ -87,7 +164,12 @@ The app is a single Swift file (`main.swift`) with no third-party dependencies.
 | File | Purpose |
 |---|---|
 | `main.swift` | The whole app |
-| `build.sh` | Build and bundle script |
+| `Makefile` | Build, package, and install targets |
+| `Info.plist.in` | `Info.plist` template |
+| `VERSION` | Current version (managed by release-please) |
 | `make-icon.swift` | Renders `AppIcon.icns` |
 | `AppIcon.icns` | App icon (original artwork) |
 | `docs/` | README images |
+| `.github/` | Workflows and Dependabot config |
+| `.commitlintrc.json` | Commit message rules |
+| `release-please-config.json`, `.release-please-manifest.json` | release-please setup |
