@@ -35,13 +35,17 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
             if [[ "$VERSION" != "$FILE_VERSION" ]]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file ($FILE_VERSION). Use the Release workflow."
+              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file ($FILE_VERSION). Releases are tagged by release-please."
               exit 1
             fi
           else
             VERSION="${FILE_VERSION}-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # same VERSION/BUILD for every make call in this job, otherwise make
+          # regenerates Info.plist and breaks the signature
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           echo "Version: $VERSION"
 
       - name: Toolchain info
@@ -51,9 +55,6 @@ jobs:
           swiftc --version
 
       - name: Build app bundle
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD: ${{ github.run_number }}
         run: make app
 
       - name: Static checks
@@ -61,9 +62,6 @@ jobs:
 
       - name: Package (zip)
         id: package
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD: ${{ github.run_number }}
         run: |
           ZIP="${APP_NAME}-${VERSION}-macos-$(uname -m).zip"
           ZIP="${ZIP//+/_}"

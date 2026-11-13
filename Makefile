@@ -51,7 +51,8 @@ zip: app ## Package the app as a zip (keeps the code signature)
 	shasum -a 256 $(ZIP) > $(ZIP).sha256
 	@cat $(ZIP).sha256
 
-test: app ## Static checks of the built bundle
+test: ## Static checks of the built bundle (run `make` first)
+	@test -d $(APP) || { echo "$(APP) not found, run make first"; exit 1; }
 	plutil -lint $(PLIST)
 	test -x $(BIN)
 	test -f $(ICON)
